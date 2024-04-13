@@ -10,7 +10,7 @@
 
 This PowerShell script creates a WPF application for viewing printer DNS settings. It resolves DNS information for provided printer names or for all printers on a specified print server. The script also allows to send a test print via TCP/IP on port 9100 using RAW ZPL or PJL.
 
-<img alt="Get-PrinterDNSConfiguration screenshot" src=""/>
+<img alt="Get-PrinterDNSConfiguration screenshot" src="/assets/get-printerdnsconfiguration-screenshot.png"/>
 
 ### Usage:
 - Run the script in PowerShell.
