@@ -1,0 +1,91 @@
+stages:
+    - version_and_tag
+    - generate_changelog
+    - upload_artifact
+    - create_release
+
+version_and_tag:
+    stage: version_and_tag
+    script:
+        - echo "Finding latest migration directory..."
+        - LATEST_MIGRATION_DIR=$(ls -d ./migrations/*/ | sort -n | tail -n 1)
+        - VERSION="v$(basename $LATEST_MIGRATION_DIR).0.0"
+        - echo "Latest migration directory $LATEST_MIGRATION_DIR"
+        - echo "Determined version $VERSION"
+        - git remote add https-origin "https://gitlab-ci-token:${CI_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
+        - git tag "$VERSION"
+        - git push https-origin -o ci.skip refs/tags/"$VERSION"
+    rules:
+        - if: '$CI_COMMIT_BRANCH == "main"'
+
+generate_changelog:
+    stage: generate_changelog
+    image:
+        name: orhunp/git-cliff:latest
+        entrypoint: [""]
+    variables:
+        GIT_STRATEGY: clone
+        GIT_DEPTH: 0
+    before_script:
+        - apt update && apt install -y git
+        - export VERSION=$(git describe --abbrev=0 --tags)
+        - echo "Latest tag $VERSION"
+    script:
+        - echo "Generating CHANGELOG for $VERSION"
+        - git-cliff -l --tag "$VERSION" --prepend CHANGELOG.md
+    needs:
+        - job: "version_and_tag"
+    artifacts:
+        paths:
+            - CHANGELOG.md
+    rules:
+        - if: '$CI_COMMIT_BRANCH == "main"'
+
+upload_artifact:
+    stage: upload_artifact
+    image: ubuntu:latest
+    before_script:
+        - apt update && apt install -y git curl
+        - export VERSION=$(git describe --abbrev=0 --tags)
+        - export LATEST_MIGRATION_DIR="./migrations/$(echo $VERSION | sed 's/^v//;s/.0.0$//')/"
+        - export PACKAGE_VERSION=$(git describe --abbrev=0 --tags  | sed 's/^v//')
+        - export PACKAGE_NAME=release-${PACKAGE_VERSION}.sql
+        - export PACKAGE_REGISTRY_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/my_package/${PACKAGE_VERSION}"
+        - export ARTIFACT_URL="${PACKAGE_REGISTRY_URL}/${PACKAGE_NAME}"
+    script:
+        - echo "Concatenating SQL files for version $VERSION"
+        - mkdir -p release
+        - echo "Latest migration directory is $LATEST_MIGRATION_DIR"
+        - cat "$LATEST_MIGRATION_DIR"/*.sql > "release/$PACKAGE_NAME"
+        - echo "Release artifact created at release/$PACKAGE_NAME"
+        - echo "URL ${PACKAGE_REGISTRY_URL}/${PACKAGE_NAME}"
+        - |
+            curl --header "JOB-TOKEN: ${CI_JOB_TOKEN}" --upload-file release/$PACKAGE_NAME "${ARTIFACT_URL}"
+    needs:
+        - job: "version_and_tag"
+        - job: "generate_changelog"
+    rules:
+        - if: '$CI_COMMIT_BRANCH == "main"'
+
+create_release:
+    stage: create_release
+    image: registry.gitlab.com/gitlab-org/release-cli:latest
+    before_script:
+        - export VERSION=$(git describe --abbrev=0 --tags)
+        - export LATEST_MIGRATION_DIR="./migrations/$(echo $VERSION | sed 's/^v//;s/.0.0$//')/"
+        - export PACKAGE_VERSION=$(git describe --abbrev=0 --tags  | sed 's/^v//')
+        - export PACKAGE_NAME=release-${PACKAGE_VERSION}.sql
+        - export PACKAGE_REGISTRY_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/my_package/${PACKAGE_VERSION}"
+        - export ARTIFACT_URL="${PACKAGE_REGISTRY_URL}/${PACKAGE_NAME}"
+    script:
+        - echo "Artifact URL $ARTIFACT_URL"
+        - echo "Creating GitLab release"
+        - |
+            release-cli create --name "Release $VERSION" --description "CHANGELOG.md" --tag-name "$VERSION" --ref "$VERSION" \
+              --assets-link "{\"name\": \"${PACKAGE_NAME}\", \"url\":\"${ARTIFACT_URL}\"}"
+    needs:
+        - job: "version_and_tag"
+        - job: "generate_changelog"
+        - job: "upload_artifact"
+    rules:
+        - if: '$CI_COMMIT_BRANCH == "main"'
